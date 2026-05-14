@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 
 import aiohttp
 import voluptuous as vol
+from voluptuous import ALLOW_EXTRA, PREVENT_EXTRA, schema as vol_schema
 from homeassistant import config_entries
 from homeassistant.const import CONF_TOKEN, CONF_USERNAME
 from homeassistant.core import callback
@@ -226,7 +227,7 @@ class ZrGasFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id=STEP_ACCOUNT_LIST,
             data_schema=vol.Schema({
-                vol.Required("accounts"): cv_select_multi(account_options),
+                vol.Required("accounts"): [vol.In(list(account_options.keys()))],
             }),
             errors=errors,
             description_placeholders={
@@ -249,11 +250,6 @@ class ZrGasFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         self._abort_if_unique_id_configured()
 
         return self.async_create_entry(title=title, data=data)
-
-
-def cv_select_multi(options: dict) -> vol.Schema:
-    """多选复选框"""
-    return vol.Schema([vol.In(options)])
 
 
 @callback
