@@ -1,25 +1,13 @@
 {
   "domain": "zr_gas",
   "name": "中燃在线",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "codeowners": ["@yahooor"],
   "requirements": [],
-  "dependencies": ["homeassistant"],
-  "code_format": "pure_py",
-  "oauth": false,
+  "dependencies": [],
+  "config_flow": true,
   "documentation": "https://github.com/yahooor/zr-gas",
   "issue_tracker": "https://github.com/yahooor/zr-gas/issues",
-  "ha_category": "utility",
-  "ha_platforms": ["sensor", "button"],
   "loggers": ["custom_components.zr_gas"],
-  "card_config": {
-    "type": "custom:zr-gas-card",
-    "name": "中燃在线卡片",
-    "description": "显示燃气余额、用量、费用等数据"
-  },
-  "frontend_config": {
-    "cards": ["cards/zr-gas-card.js"]
-  },
-  "quality_scale": "platinum",
   "homeassistant": "2024.1.0"
 }

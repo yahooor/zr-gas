@@ -1,6 +1,6 @@
 """中燃在线 Home Assistant 集成
 
-版本: 1.0.4
+版本: 1.0.5
 作者: @yahooor
 
 基于中燃在线平台抓包数据分析实现
@@ -123,7 +123,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """卸载配置条目"""
-    unload_ok = await hass.config_entries.async_unload_entries(entry, PLATFORMS)
+    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
     if unload_ok and entry.entry_id in hass.data.get(DOMAIN, {}):
         del hass.data[DOMAIN][entry.entry_id]
