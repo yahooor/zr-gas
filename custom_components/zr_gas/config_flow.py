@@ -53,7 +53,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 return await self.async_step_token_import()
 
         return self.async_show_form(
-            step_id=STEP_AUTH_METHOD,
+            step_id="user",
             data_schema=vol.Schema({
                 vol.Required("auth_method", default=STEP_SMS_LOGIN): vol.In({
                     STEP_SMS_LOGIN: "短信验证码登录（推荐）",
