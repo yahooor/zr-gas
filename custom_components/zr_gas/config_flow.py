@@ -177,7 +177,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                             "token_type": token_type,
                         }
 
-                        # 尝试先用通用验证接口验证Token
+                        # 简化逻辑：直接尝试获取账户列表
                         try:
                             is_valid = await self._api_client.verify_web_token()
                             _LOGGER.debug(f"verify_web_token结果: {is_valid}")
@@ -185,15 +185,9 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                             _LOGGER.debug(f"verify_web_token异常: {e}")
                             is_valid = False
 
-                        if is_valid:
-                            # Token有效，获取账户列表
-                            accounts = await self._api_client.get_bind_gas_list()
-                            self._accounts = accounts
-                        else:
-                            # 验证失败，尝试直接获取账户列表
-                            _LOGGER.warning("通用验证失败，尝试旧接口...")
-                            accounts = await self._api_client.get_bind_gas_list()
-                            self._accounts = accounts
+                        # 无论验证结果如何，直接尝试获取账户列表
+                        accounts = await self._api_client.get_bind_gas_list()
+                        self._accounts = accounts
 
                     if not self._accounts:
                         return self.async_show_form(

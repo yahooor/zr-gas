@@ -239,13 +239,12 @@ class ZrGasApiClient:
         # 调试日志
         _LOGGER.debug(f"get_bind_gas_list 请求: userId={user_id}, token={self._token[:10] if self._token else 'None'}...")
 
+        # 先尝试不带签名的简单请求
         data = {
             "userId": user_id,
+            "accessToken": self._token,
             "timeStamp": timestamp,
         }
-        data["signature"] = self._generate_signature(
-            user_id, timestamp
-        )
 
         result = await self._post_request(
             API_ENDPOINTS["bind_list"],
@@ -458,30 +457,47 @@ class ZrGasApiClient:
         _LOGGER.info(f"已设置认证: userId={user_id}")
 
     async def verify_web_token(self) -> bool:
-        """验证网页版Token是否有效
+        """验证Token是否有效
 
-        使用网页版验证接口: /wisdom/auth/checkMasInfo
+        使用多个接口尝试验证
         返回: True 表示Token有效
         """
         if not self._token or not self._user_id:
             _LOGGER.warning("缺少Token或userId，无法验证")
             return False
 
-        data = {
-            "accessToken": self._token,
-            "userId": self._user_id,
-        }
+        timestamp = str(int(datetime.now().timestamp() * 1000))
 
-        try:
-            result = await self._post_request(
-                API_ENDPOINTS["web_login"],
-                data,
-                need_auth=False,  # 网页版验证接口不需要认证
-            )
-            return result.get("status") in ["1", "10000", 1, 10000]
-        except ZrGasApiError as e:
-            _LOGGER.error(f"网页版Token验证失败: {e}")
-            return False
+        # 尝试多种参数格式
+        formats = [
+            # 格式1: accessToken + userId
+            {"accessToken": self._token, "userId": self._user_id, "timeStamp": timestamp},
+            # 格式2: token + userId (不用accessToken)
+            {"token": self._token, "userId": self._user_id, "timeStamp": timestamp},
+            # 格式3: 只用userId
+            {"userId": self._user_id, "timeStamp": timestamp},
+        ]
+
+        for i, data in enumerate(formats):
+            try:
+                _LOGGER.debug(f"验证尝试 {i+1}: {data}")
+                result = await self._post_request(
+                    API_ENDPOINTS["web_login"],
+                    data,
+                    need_auth=False,
+                )
+                status = result.get("status")
+                if str(status) in ["1", "10000", 1, 10000]:
+                    _LOGGER.info("Token验证成功")
+                    return True
+                # 记录返回消息用于调试
+                msg = result.get("message", "")
+                _LOGGER.debug(f"验证尝试 {i+1} 返回: status={status}, message={msg}")
+            except Exception as e:
+                _LOGGER.debug(f"验证尝试 {i+1} 异常: {e}")
+
+        _LOGGER.warning("所有验证尝试都失败")
+        return False
 
     async def get_web_user_info(self) -> Dict[str, Any]:
         """获取网页版用户信息
