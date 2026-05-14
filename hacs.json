@@ -1,7 +1,5 @@
 {
   "name": "中燃在线",
-  "zip_release": true,
-  "filename": "zr_gas.zip",
   "domains": ["zr_gas"],
   "report_issues": "https://github.com/yahooor/zr-gas/issues"
 }
