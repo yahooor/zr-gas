@@ -177,17 +177,21 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                             "token_type": token_type,
                         }
 
-                        # 根据Token类型选择验证方式
-                        if token_type == "web":
-                            # 网页版: 使用专门的验证接口
+                        # 尝试先用通用验证接口验证Token
+                        try:
                             is_valid = await self._api_client.verify_web_token()
-                            if not is_valid:
-                                raise ZrGasAuthError("网页版Token无效")
-                            # 获取账户列表
-                            accounts = await self._api_client.get_web_user_info()
-                            self._accounts = accounts.get("custList", []) if accounts else []
+                            _LOGGER.debug(f"verify_web_token结果: {is_valid}")
+                        except Exception as e:
+                            _LOGGER.debug(f"verify_web_token异常: {e}")
+                            is_valid = False
+
+                        if is_valid:
+                            # Token有效，获取账户列表
+                            accounts = await self._api_client.get_bind_gas_list()
+                            self._accounts = accounts
                         else:
-                            # 微信小程序: 使用标准的验证接口
+                            # 验证失败，尝试直接获取账户列表
+                            _LOGGER.warning("通用验证失败，尝试旧接口...")
                             accounts = await self._api_client.get_bind_gas_list()
                             self._accounts = accounts
 
