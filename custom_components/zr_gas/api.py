@@ -468,31 +468,39 @@ class ZrGasApiClient:
 
         timestamp = str(int(datetime.now().timestamp() * 1000))
 
-        # 尝试多种参数格式
-        formats = [
+        # 尝试多种参数格式和端点
+        test_cases = [
             # 格式1: accessToken + userId
-            {"accessToken": self._token, "userId": self._user_id, "timeStamp": timestamp},
-            # 格式2: token + userId (不用accessToken)
-            {"token": self._token, "userId": self._user_id, "timeStamp": timestamp},
-            # 格式3: 只用userId
-            {"userId": self._user_id, "timeStamp": timestamp},
+            {"endpoint": "web_login", "params": {"accessToken": self._token, "userId": self._user_id, "timeStamp": timestamp}},
+            # 格式2: token + userId
+            {"endpoint": "web_login", "params": {"token": self._token, "userId": self._user_id, "timeStamp": timestamp}},
+            # 格式3: userCode instead of userId
+            {"endpoint": "web_login", "params": {"accessToken": self._token, "userCode": self._user_id, "timeStamp": timestamp}},
+            # 格式4: userId as int
+            {"endpoint": "web_login", "params": {"accessToken": self._token, "userId": int(self._user_id) if self._user_id.isdigit() else self._user_id, "timeStamp": timestamp}},
+            # 格式5: test0 value (可能是特殊的API key)
+            {"endpoint": "web_login", "params": {"accessToken": self._token, "userId": self._user_id, "test0": "1", "timeStamp": timestamp}},
+            # 格式6: 尝试其他端点
+            {"endpoint": "web_login2", "params": {"accessToken": self._token, "userId": self._user_id}},
+            # 格式7: 只有token
+            {"endpoint": "web_login", "params": {"accessToken": self._token}},
         ]
 
-        for i, data in enumerate(formats):
+        for i, tc in enumerate(test_cases):
             try:
-                _LOGGER.debug(f"验证尝试 {i+1}: {data}")
+                _LOGGER.debug(f"验证尝试 {i+1}: {tc['endpoint']} - {tc['params']}")
+                endpoint = API_ENDPOINTS.get(tc["endpoint"], tc["endpoint"])
                 result = await self._post_request(
-                    API_ENDPOINTS["web_login"],
-                    data,
+                    endpoint,
+                    tc["params"],
                     need_auth=False,
                 )
                 status = result.get("status")
+                msg = result.get("message", "")
+                _LOGGER.debug(f"验证尝试 {i+1} 返回: status={status}, message={msg}")
                 if str(status) in ["1", "10000", 1, 10000]:
                     _LOGGER.info("Token验证成功")
                     return True
-                # 记录返回消息用于调试
-                msg = result.get("message", "")
-                _LOGGER.debug(f"验证尝试 {i+1} 返回: status={status}, message={msg}")
             except Exception as e:
                 _LOGGER.debug(f"验证尝试 {i+1} 异常: {e}")
 
