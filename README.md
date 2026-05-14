@@ -1,7 +1,7 @@
-# 中燃在线（重构版）Home Assistant 集成
+# 中燃在线 Home Assistant 集成
 
-[![GitHub Releases](https://img.shields.io/github/v/release/yahooor/zr-gas-wechat)](https://github.com/yahooor/zr-gas-wechat/releases)
-[![GitHub License](https://img.shields.io/github/license/yahooor/zr-gas-wechat)](LICENSE)
+[![GitHub Releases](https://img.shields.io/github/v/release/yahooor/zr-gas)](https://github.com/yahooor/zr-gas/releases)
+[![GitHub License](https://img.shields.io/github/license/yahooor/zr-gas)](LICENSE)
 
 **中燃在线**燃气数据 Home Assistant 自定义集成，支持余额查询、月度用量、阶梯气价、欠费提醒等功能。
 
@@ -28,7 +28,7 @@
 
 1. 安装 [HACS](https://hacs.xyz/)
 2. 在 HACS 中搜索"中燃在线"或添加自定义仓库：
-   - Repository: `https://github.com/yahooor/zr-gas-wechat`
+   - Repository: `https://github.com/yahooor/zr-gas`
    - Category: `Integration`
 3. 点击安装
 
@@ -38,7 +38,7 @@
 
 ```bash
 cd custom_components
-git clone https://github.com/yahooor/zr-gas-wechat.git zr_gas
+git clone https://github.com/yahooor/zr-gas.git zr_gas
 ```
 
 ## 配置方法
@@ -99,8 +99,12 @@ entity: sensor.zr_gas_xxxx_balance
 ## 鸣谢
 
 - 基于中燃在线平台抓包分析
-- 参考 [zr-gas-ha](https://github.com/yahooor/zr-gas-ha) 项目
+- 参考 [zr-gas](https://github.com/yahooor/zr-gas) 项目
 
 ## 许可证
 
 MIT License - 详见 [LICENSE](LICENSE) 文件
+
+## 问题反馈
+
+请提交 [Issues](https://github.com/yahooor/zr-gas/issues)
