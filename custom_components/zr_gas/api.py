@@ -65,8 +65,10 @@ class ZrGasApiClient:
         headers = dict(HEADERS)
         if self._token:
             headers["accessToken"] = self._token
+            _LOGGER.debug(f"使用 Token: {self._token[:20]}...")  # 只打印前20字符
         if self._user_id:
             headers["userId"] = str(self._user_id)
+            _LOGGER.debug(f"使用 userId: {self._user_id}")
         return headers
 
     async def _post_request(
