@@ -1,7 +1,6 @@
 {
   "name": "中燃在线",
   "zip_release": true,
-  "domains": ["sensor"],
-  "report_issues": "https://github.com/yahooor/zr-gas-wechat/issues",
-  "load_on_platform": "startup"
+  "domains": ["zr_gas"],
+  "report_issues": "https://github.com/yahooor/zr-gas/issues"
 }
