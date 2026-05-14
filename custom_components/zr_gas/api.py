@@ -136,25 +136,45 @@ class ZrGasApiClient:
 
         基于抓包: POST /crm_controller/user/sendSmsCode
         """
-        timestamp = str(int(datetime.now().timestamp() * 1000))
-        signature = self._generate_signature(phone, timestamp)
+        timestamp = str(int(datetime.now().timestamp() * 1000)
 
-        data = {
-            "mobile": phone,
-            "timeStamp": timestamp,
-            "signature": signature,
-            "platform": "mp-weixin",
-            "appId": WECHAT_APP_ID,
-        }
+        # 尝试多种参数格式
+        formats = [
+            # 格式1: 标准参数 (带签名)
+            {"mobile": phone, "timeStamp": timestamp, "signature": self._generate_signature(phone, timestamp), "platform": "mp-weixin", "appId": WECHAT_APP_ID},
+            # 格式2: 不带签名
+            {"mobile": phone, "timeStamp": timestamp, "platform": "mp-weixin", "appId": WECHAT_APP_ID},
+            # 格式3: 带86前缀
+            {"mobile": "86" + phone, "timeStamp": timestamp, "signature": self._generate_signature("86" + phone, timestamp), "platform": "mp-weixin", "appId": WECHAT_APP_ID},
+            # 格式4: 简化的
+            {"mobile": phone},
+        ]
 
-        result = await self._post_request(
-            API_ENDPOINTS["send_sms"],
-            data,
-            need_auth=False,
-        )
-
-        _LOGGER.info(f"验证码已发送到 {phone[:3]}****{phone[-4:]}")
-        return result.get("status") == "1"
+        for i, data in enumerate(formats):
+            try:
+                _LOGGER.debug(f"send_sms尝试 {i+1}: {data}")
+                result = await self._post_request(
+                    API_ENDPOINTS["send_sms"],
+                    data,
+                    need_auth=False,
+                )
+                status = result.get("status")
+                msg = result.get("message", "")
+                _LOGGER.debug(f"send_sms尝试 {i+1} 返回: status={status}, message={msg}")
+                if str(status) in ["1", "10000", 1, 10000]:
+                    _LOGGER.info(f"验证码已发送到 {phone[:3]}****{phone[-4:]}")
+                    return True
+                # 如果返回账户不存在，说明手机号不在系统中
+                if str(status) == "30001":
+                    _LOGGER.error(f"手机号 {phone} 不在中燃系统中")
+                    raise ZrGasApiError("账户不存在")
+            except ZrGasApiError:
+                raise
+            except Exception as e:
+                _LOGGER.debug(f"send_sms尝试 {i+1} 异常: {e}")
+                if i < len(formats) - 1:
+                    continue
+                raise ZrGasApiError(f"发送验证码失败: {e}")
 
     async def verify_sms_code(self, phone: str, code: str) -> Dict[str, Any]:
         """验证短信验证码并登录
