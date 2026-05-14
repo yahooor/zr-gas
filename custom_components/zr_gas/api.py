@@ -105,11 +105,13 @@ class ZrGasApiClient:
                         raise ZrGasApiError(f"HTTP错误: {resp.status}")
 
                     result = await resp.json()
+                    _LOGGER.debug(f"API响应: {result}")
                     status = result.get("status")
                     message = result.get("message", "")
 
-                    if status != "1":
-                        error_msg = ERROR_CODES.get(str(status), message)
+                    # 支持多种成功状态码格式: "10000", "1", 10000, 1
+                    if str(status) not in ["1", "10000", 1, 10000]:
+                        error_msg = ERROR_CODES.get(str(status), message or f"未知错误 (code: {status})")
                         _LOGGER.error(f"API错误 [{status}]: {error_msg}")
 
                         if status in ["20001", "20002", "20003"]:
@@ -232,13 +234,17 @@ class ZrGasApiClient:
         - oweMoney: 欠费金额
         """
         timestamp = str(int(datetime.now().timestamp() * 1000))
+        user_id = self._user_id
+
+        # 调试日志
+        _LOGGER.debug(f"get_bind_gas_list 请求: userId={user_id}, token={self._token[:10] if self._token else 'None'}...")
 
         data = {
-            "userId": self._user_id,
+            "userId": user_id,
             "timeStamp": timestamp,
         }
         data["signature"] = self._generate_signature(
-            self._user_id, timestamp
+            user_id, timestamp
         )
 
         result = await self._post_request(
