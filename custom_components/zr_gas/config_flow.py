@@ -12,7 +12,6 @@ from typing import Any, Dict, List, Optional
 
 import aiohttp
 import voluptuous as vol
-from voluptuous import ALLOW_EXTRA, PREVENT_EXTRA, schema as vol_schema
 from homeassistant import config_entries
 from homeassistant.const import CONF_TOKEN, CONF_USERNAME
 from homeassistant.core import callback
@@ -30,7 +29,7 @@ STEP_TOKEN_IMPORT = "token_import"
 STEP_ACCOUNT_LIST = "account_list"
 
 
-class ZrGasFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
+class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """配置流处理器"""
 
     VERSION = 1
