@@ -47,12 +47,15 @@ class ZrGasCoordinator(DataUpdateCoordinator):
     async def _async_setup(self) -> None:
         """初始化 API 客户端"""
         data = self._entry.data
-        token = data.get("token")
-        user_id = data.get("user_id")
-        cust_code = data.get("cust_code")
+        
+        # 向下兼容：支持多种字段名
+        token = data.get("token") or data.get("access_token") or data.get("accessToken")
+        user_id = data.get("user_id") or data.get("userId") or data.get("USER_ID")
+        cust_code = data.get("cust_code") or data.get("custCode") or data.get("CUST_CODE")
 
         if not token:
-            _LOGGER.error("未找到 Token，配置不完整")
+            _LOGGER.warning("未找到 Token，支持字段: token, access_token, accessToken")
+            _LOGGER.debug("可用配置字段: %s", list(data.keys()))
             return
 
         session = aiohttp.ClientSession()
@@ -67,7 +70,8 @@ class ZrGasCoordinator(DataUpdateCoordinator):
         if not self._api_client:
             raise UpdateFailed("API客户端未初始化")
 
-        cust_code = self._entry.data.get("cust_code")
+        # 向下兼容：支持多种字段名
+        cust_code = self._entry.data.get("cust_code") or self._entry.data.get("custCode") or self._entry.data.get("CUST_CODE")
         if not cust_code:
             raise UpdateFailed("未找到客户编号")
 
