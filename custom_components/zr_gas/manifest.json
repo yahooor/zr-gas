@@ -1,7 +1,7 @@
 {
   "domain": "zr_gas",
   "name": "中燃在线",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "codeowners": ["@yahooor"],
   "requirements": [],
   "dependencies": ["homeassistant"],
