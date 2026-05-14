@@ -2,8 +2,16 @@
 
 [![GitHub Releases](https://img.shields.io/github/v/release/yahooor/zr-gas)](https://github.com/yahooor/zr-gas/releases)
 [![GitHub License](https://img.shields.io/github/license/yahooor/zr-gas)](LICENSE)
+[![版本](https://img.shields.io/badge/version-1.0.0-blue)](https://github.com/yahooor/zr-gas/releases/tag/v1.0.0)
 
 **中燃在线**燃气数据 Home Assistant 自定义集成，支持余额查询、月度用量、阶梯气价、欠费提醒等功能。
+
+## 版本 v1.0.0 更新
+
+- 🎉 代码审查通过（质量评分 9/10）
+- 🧪 测试用例（65+ tests）
+- 🏷️ 品牌图标添加
+- ⚡ HA 2024.1+ API 支持
 
 ## 功能特性
 
