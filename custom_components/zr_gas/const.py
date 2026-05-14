@@ -8,7 +8,7 @@ API 基于中燃在线平台抓包数据分析:
 
 DOMAIN = "zr_gas"
 NAME = "中燃在线"
-VERSION = "0.12.2"
+VERSION = "1.0.1"
 
 # 配置条目常量
 CONF_USER_ID = "user_id"
