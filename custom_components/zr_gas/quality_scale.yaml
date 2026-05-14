@@ -1,0 +1,63 @@
+# Home Assistant Quality Scale
+#
+# This file defines the quality level for the zr_gas integration.
+# See: https://github.com/hacs/integration/blob/main/docs/qs.md
+#
+# Levels: bronze / silver / gold / platinum
+
+zr_gas:
+  # Configuration entry - 加载配置条目
+  compliance:
+    - config_flow
+    - options_flow
+    - reauth_flow
+
+  # Integration has a tested working integration
+  testing:
+    - integration_tests
+
+  # Plumbing - 管道层 (确保正常工作)
+  plumbing:
+    - async_setup_entry
+    - async_unload_entry
+    - coordinator
+
+  # Category - 分类
+  categories:
+    - sensor
+
+  # Analytics - 分析
+  analytics: skip
+
+  # Auto-Scale - 自动扩展
+  alarms: skip
+
+  # Code quality - 代码质量
+  code_owners:
+    - "@yahooor"
+
+  repo:
+    type: alpha
+    # 允许HACS自动发布版本 (需要配置 GitHub Release)
+    # auto_release: true
+
+  # Home Assistant version - 最低HA版本
+  ha_min_version: "2024.1"
+
+  # HACS integration type - HACS集成类型
+ # sensor - 传感器设备
+  integration_type: device
+
+  # Lovelace - 前端卡片支持
+  cards:
+    - type: javascript
+      name: zr_gas_card
+      filename: cards/zr-gas-card.js
+
+  # Documentation - 文档
+  documentation:
+    - https://github.com/yahooor/zr-gas-ha#readme
+
+  # Issue tracker - 问题跟踪
+  issue_tracker:
+    - https://github.com/yahooor/zr-gas-ha/issues

@@ -1,0 +1,58 @@
+{
+  "title": "中燃在线（重构版）",
+  "config": {
+    "step": {
+      "auth_method": {
+        "title": "选择认证方式",
+        "data": {
+          "auth_method": "认证方式"
+        },
+        "description": "请选择您的中燃在线账户认证方式"
+      },
+      "sms_login": {
+        "title": "短信验证码登录",
+        "data": {
+          "username": "手机号",
+          "sms_code": "验证码"
+        },
+        "description": "请输入手机号和收到的验证码"
+      },
+      "token_import": {
+        "title": "Token导入",
+        "data": {
+          "token": "accessToken",
+          "user_id": "userId（可选）"
+        },
+        "description": "从抓包数据中导入Token"
+      },
+      "account_list": {
+        "title": "选择燃气账户",
+        "data": {
+          "accounts": "绑定账户"
+        },
+        "description": "请选择要监控的燃气账户"
+      }
+    },
+    "error": {
+      "phone_required": "请输入手机号",
+      "token_required": "请输入Token",
+      "no_accounts": "未找到绑定账户",
+      "auth_error": "认证失败，请检查验证码",
+      "api_error": "API请求失败"
+    },
+    "abort": {
+      "already_configured": "已配置"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "刷新设置",
+        "data": {
+          "scan_interval": "刷新间隔（秒）"
+        },
+        "description": "设置数据刷新间隔"
+      }
+    }
+  }
+}

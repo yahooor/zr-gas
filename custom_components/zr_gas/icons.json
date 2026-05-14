@@ -1,0 +1,27 @@
+{
+  "state": {
+    "default": {
+      "balance": "mdi:account-balance-wallet",
+      "monthly_usage": "mdi:fire",
+      "monthly_cost": "mdi:cash-multiple",
+      "owe_money": "mdi:alert-circle",
+      "last_record": "mdi:gauge",
+      "qty_meter_balance": "mdi:gas-cylinder",
+      "purch_times": "mdi:cart",
+      "last_record_time": "mdi:clock-outline",
+      "annual_usage": "mdi:fire",
+      "annual_cost": "mdi:cash-multiple",
+      "unit_price": "mdi:currency-cny",
+      "meter_no": "mdi:identifier",
+      "meter_form_name": "mdi:gas-burner",
+      "card_no": "mdi:credit-card",
+      "cust_address": "mdi:map-marker",
+      "comp_name": "mdi:domain",
+      "current_tier": "mdi:stairs",
+      "current_tier_price": "mdi:currency-cny",
+      "tier_cycle_start": "mdi:calendar-start",
+      "period": "mdi:calendar-month",
+      "diagnostic": "mdi:stethoscope"
+    }
+  }
+}
