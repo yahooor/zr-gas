@@ -8,7 +8,7 @@ API 基于中燃在线平台抓包数据分析:
 
 DOMAIN = "zr_gas"
 NAME = "中燃在线"
-VERSION = "1.0.8"
+VERSION = "1.0.9"
 
 # 配置条目常量
 CONF_USER_ID = "user_id"
@@ -23,6 +23,10 @@ API_ENDPOINTS = {
     "send_sms": "/crm_controller/user/sendSmsCode",  # 发送短信验证码
     "verify_sms": "/crm_controller/user/verifySmsCode",  # 验证短信码
     "wx_login": "/crm_controller/user/wxLogin",  # 微信登录
+
+    # 网页版登录（与小程序不同）
+    "web_login": "/wisdom/auth/checkMasInfo",  # 网页版Token验证
+    "web_login2": "/crm_controller/user/getUserInfo",  # 网页版获取用户信息
 
     # 用户信息
     "bind_list": "/crm_controller/user/getBindGasCustList",  # 获取绑定账户列表

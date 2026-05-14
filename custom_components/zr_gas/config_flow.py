@@ -26,6 +26,7 @@ _LOGGER = logging.getLogger(__name__)
 STEP_AUTH_METHOD = "auth_method"
 STEP_SMS_LOGIN = "sms_login"
 STEP_TOKEN_IMPORT = "token_import"
+STEP_TOKEN_WEB = "token_web"
 STEP_ACCOUNT_LIST = "account_list"
 
 
@@ -40,6 +41,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._auth_data: Dict[str, Any] = {}
         self._accounts: List[Dict[str, Any]] = []
         self._phone: str = ""
+        self._token_type: str = "weixin"  # 默认微信小程序
 
     async def async_step_user(self, user_input: Optional[Dict[str, Any]] = None) -> FlowResult:
         """步骤0: 选择认证方式"""
@@ -49,19 +51,25 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             auth_method = user_input.get("auth_method", STEP_SMS_LOGIN)
             if auth_method == STEP_SMS_LOGIN:
                 return await self.async_step_sms_login()
+            elif auth_method == STEP_TOKEN_WEB:
+                return await self.async_step_token_import(token_type="web")
             else:
-                return await self.async_step_token_import()
+                return await self.async_step_token_import(token_type="weixin")
 
         return self.async_show_form(
             step_id="user",
             data_schema=vol.Schema({
                 vol.Required("auth_method", default=STEP_SMS_LOGIN): vol.In({
                     STEP_SMS_LOGIN: "短信验证码登录（推荐）",
-                    STEP_TOKEN_IMPORT: "Token 直接导入（抓包获取）",
+                    STEP_TOKEN_WEB: "网页版 Token 导入",
+                    STEP_TOKEN_IMPORT: "微信小程序 Token 导入",
                 }),
             }),
             errors=errors,
-            description_placeholders={"name": NAME},
+            description_placeholders={
+                "name": NAME,
+                "help": "网页版和微信小程序Token不共享，请选择正确的来源",
+            },
         )
 
     async def async_step_sms_login(self, user_input: Optional[Dict[str, Any]] = None) -> FlowResult:
@@ -143,9 +151,15 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             },
         )
 
-    async def async_step_token_import(self, user_input: Optional[Dict[str, Any]] = None) -> FlowResult:
-        """步骤1B: Token 直接导入"""
+    async def async_step_token_import(self, user_input: Optional[Dict[str, Any]] = None, token_type: str = "weixin") -> FlowResult:
+        """步骤1B: Token 直接导入
+
+        Args:
+            user_input: 用户输入
+            token_type: Token类型 "web"(网页版) 或 "weixin"(微信小程序)
+        """
         errors: Dict[str, str] = {}
+        self._token_type = token_type
 
         if user_input is not None:
             token = user_input.get(CONF_TOKEN, "")
@@ -160,11 +174,22 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         self._auth_data = {
                             "token": token,
                             "user_id": user_id,
+                            "token_type": token_type,
                         }
 
-                        # 验证 Token 是否有效
-                        accounts = await self._api_client.get_bind_gas_list()
-                        self._accounts = accounts
+                        # 根据Token类型选择验证方式
+                        if token_type == "web":
+                            # 网页版: 使用专门的验证接口
+                            is_valid = await self._api_client.verify_web_token()
+                            if not is_valid:
+                                raise ZrGasAuthError("网页版Token无效")
+                            # 获取账户列表
+                            accounts = await self._api_client.get_web_user_info()
+                            self._accounts = accounts.get("custList", []) if accounts else []
+                        else:
+                            # 微信小程序: 使用标准的验证接口
+                            accounts = await self._api_client.get_bind_gas_list()
+                            self._accounts = accounts
 
                     if not self._accounts:
                         return self.async_show_form(

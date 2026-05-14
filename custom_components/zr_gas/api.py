@@ -456,3 +456,50 @@ class ZrGasApiClient:
         self._token = token
         self._user_id = user_id
         _LOGGER.info(f"已设置认证: userId={user_id}")
+
+    async def verify_web_token(self) -> bool:
+        """验证网页版Token是否有效
+
+        使用网页版验证接口: /wisdom/auth/checkMasInfo
+        返回: True 表示Token有效
+        """
+        if not self._token or not self._user_id:
+            _LOGGER.warning("缺少Token或userId，无法验证")
+            return False
+
+        data = {
+            "accessToken": self._token,
+            "userId": self._user_id,
+        }
+
+        try:
+            result = await self._post_request(
+                API_ENDPOINTS["web_login"],
+                data,
+                need_auth=False,  # 网页版验证接口不需要认证
+            )
+            return result.get("status") in ["1", "10000", 1, 10000]
+        except ZrGasApiError as e:
+            _LOGGER.error(f"网页版Token验证失败: {e}")
+            return False
+
+    async def get_web_user_info(self) -> Dict[str, Any]:
+        """获取网页版用户信息
+
+        使用网页版接口: /crm_controller/user/getUserInfo
+        """
+        if not self._token or not self._user_id:
+            raise ZrGasAuthError("缺少Token或userId")
+
+        data = {
+            "accessToken": self._token,
+            "userId": self._user_id,
+        }
+
+        result = await self._post_request(
+            API_ENDPOINTS["web_login2"],
+            data,
+            need_auth=False,
+        )
+
+        return result.get("data", {})
