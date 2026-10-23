@@ -1,307 +1,103 @@
-"""中燃在线集成 - 常量定义
+"""Constants for the 中燃在线 (ZR Gas) integration.
 
-API 基于中燃在线平台抓包数据分析:
-- 域名: zrds.95007.com
-- 平台: mp-weixin
-- 签名: MD5(参数拼接 + salt)
+本集成合并了两个数据来源（同一后端 zrds.95007.com 的两个不同小程序）：
+
+- **在线端 (mp)** — 即原 zr-gas-ha 集成。来自 uniapp 编译的小程序
+  (Referer appid: wx19c4e29f3ef6b4a0)。登录走图形验证码 + 短信验证码
+  (sendsms3.do + xcxMobileUserLogin)，返回 masToken/sid。字段映射经过
+  实机验证（余额 = countMoney）。
+
+- **缴费端 (pay)** — 即原 zr-gas 集成。来自缴费小程序
+  (Referer appid: wx2082cbdc25b3b8e6, accessFrom: yphpaymp)。登录走
+  sendSmsCode + verifySmsCode，返回 accessToken/userId。字段映射基于
+  抓包（余额 = qtyBalance），短信登录未完全验证，推荐 Token 导入。
 """
 
 DOMAIN = "zr_gas"
-NAME = "中燃在线"
-VERSION = "1.0.13"
 
-# 配置条目常量
-CONF_USER_ID = "user_id"
-CONF_CUST_CODE = "cust_code"
-
-# API 配置（基于抓包确认）
-BASE_URL = "https://zrds.95007.com"
-
-# API 端点（基于抓包确认）
-API_ENDPOINTS = {
-    # 登录认证
-    "send_sms": "/crm_controller/user/sendSmsCode",  # 发送短信验证码
-    "verify_sms": "/crm_controller/user/verifySmsCode",  # 验证短信码
-    "wx_login": "/crm_controller/user/wxLogin",  # 微信登录
-
-    # 网页版登录（与小程序不同）
-    "web_login": "/wisdom/auth/checkMasInfo",  # 网页版Token验证
-    "web_login2": "/crm_controller/user/getUserInfo",  # 网页版获取用户信息
-
-    # 用户信息
-    "bind_list": "/crm_controller/user/getBindGasCustList",  # 获取绑定账户列表
-    "cust_info": "/crm_controller/user/findCustInfoByCustCodeAndCustName",  # 客户详细信息
-    "meter_info": "/crm_controller/user/getMeterInfo",  # 燃气表信息
-
-    # 数据查询
-    "gas_data": "/crm_controller/gas/queryGasInfo",  # 燃气数据查询
-    "monthly_usage": "/crm_controller/gas/queryMonthlyUsage",  # 月度用量
-    "bill_history": "/crm_controller/gas/queryBillHistory",  # 账单历史
-
-    # 新发现接口
-    "gas_consumption": "/crm_controller/user/getGasConsumption",  # 用气量记录
-    "payment_list": "/crm_controller/payfee/getPaymentList",  # 缴费记录
+# ── 数据来源 ──────────────────────────────────────────────────────────
+SOURCE_MP = "mp"  # 在线端（原 zr-gas-ha）
+SOURCE_PAY = "pay"  # 缴费端（原 zr-gas）
+SOURCES = {
+    SOURCE_MP: "在线端",
+    SOURCE_PAY: "缴费端",
 }
 
-# 请求头配置（基于抓包确认）
-HEADERS = {
-    "Host": "zrds.95007.com",
-    "Content-Type": "application/x-www-form-urlencoded",
+# Config entry keys
+CONF_SOURCE = "source"
+CONF_ACCESS_TOKEN = "access_token"
+CONF_UPDATE_INTERVAL = "update_interval"
+CONF_BALANCE_THRESHOLD = "balance_threshold"
+CONF_USER_ID = "user_id"
+CONF_X_MAS_APP_INFO = "x_mas_app_info"
+CONF_MOBILE = "mobile"
+
+# 阶梯气价配置项
+CONF_TIER_2_START = "yearly_step_2_start_volume"  # 第二档起始量 (m³)
+CONF_TIER_3_START = "yearly_step_3_start_volume"  # 第三档起始量 (m³)
+CONF_TIER_1_PRICE = "year_step_1_price"  # 第一档单价 (CNY/m³)
+CONF_TIER_2_PRICE = "year_step_2_price"  # 第二档单价 (CNY/m³)
+CONF_TIER_3_PRICE = "year_step_3_price"  # 第三档单价 (CNY/m³)
+CONF_TIER_CYCLE_START = "tier_cycle_start_md"  # 阶梯周期起始月日 (MM-DD)
+
+# 账单查询范围配置项
+CONF_BILL_YEARS = "bill_query_years"  # 查询年数
+CONF_CUSTOMERS = "customers"  # 已绑定的燃气客户列表
+
+# Defaults
+DEFAULT_UPDATE_INTERVAL = 21600  # 6 hours in seconds
+DEFAULT_BALANCE_THRESHOLD = 50.0  # CNY
+
+# 阶梯气价默认值（张家界民用天然气）
+DEFAULT_TIER_2_START = 400  # m³
+DEFAULT_TIER_3_START = 1680  # m³
+DEFAULT_TIER_1_PRICE = 2.99  # CNY/m³
+DEFAULT_TIER_2_PRICE = 3.44  # CNY/m³
+DEFAULT_TIER_3_PRICE = 4.34  # CNY/m³
+DEFAULT_TIER_CYCLE_START = "01-01"  # 阶梯周期从1月1日起
+
+# 账单查询默认值
+DEFAULT_BILL_YEARS = 2  # 查询2年账单
+
+BASE_URL = "https://zrds.95007.com"
+
+# ── 在线端 (mp) 登录端点 — from JS reverse engineering ──────────────
+ENDPOINT_CAPTCHA_IMG = "/controller/merchant/authCode.do"
+ENDPOINT_SEND_SMS = "/user/sendsms3.do"
+ENDPOINT_LOGIN_SMS = "/user/xcxMobileUserLogin"
+
+# ── 共享/在线端数据端点 ──────────────────────────────────────────────
+ENDPOINT_INIT = "/tracking/buriedPointEvent/add"
+ENDPOINT_CHECK_TOKEN = "/wisdom/auth/checkMasInfo"
+ENDPOINT_GET_CUSTOMERS = "/crm_controller/user/getBindGasCustList"
+ENDPOINT_GET_CUSTOMER_INFO = "/crm_controller/user/findCustInfoByCustCodeAndCustName"
+ENDPOINT_GET_BILLS = "/crm_controller/payfee/getCustomerMoneyList"
+
+# ── 缴费端 (pay) 端点 — from packet capture ─────────────────────────
+ENDPOINT_PAY_SEND_SMS = "/crm_controller/user/sendSmsCode"
+ENDPOINT_PAY_VERIFY_SMS = "/crm_controller/user/verifySmsCode"
+ENDPOINT_PAY_METER_INFO = "/crm_controller/user/getMeterInfo"
+ENDPOINT_PAY_BILL_HISTORY = "/crm_controller/gas/queryBillHistory"
+
+# ── 缴费记录 — 借鉴 ExceptionsOccur/hazr 项目（同一后端） ────────────
+ENDPOINT_PAYMENT_LOG = "/crm_controller/payfee/getPaymentLogForHsh"
+
+# 缴费端附加请求头（基于抓包）
+PAY_EXTRA_HEADERS = {
     "accessFrom": "yphpaymp",
-    "platform": "mp-weixin",
-    "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 MicroMessenger/8.0.73(0x18004927) NetType/WIFI Language/zh_CN",
+    "User-Agent": (
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "
+        "AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 "
+        "MicroMessenger/8.0.73(0x18004927) NetType/WIFI Language/zh_CN"
+    ),
     "Referer": "https://servicewechat.com/wx2082cbdc25b3b8e6/107/page-frame.html",
 }
 
-# 微信小程序 AppID（基于抓包确认）
-WECHAT_APP_ID = "wx2082cbdc25b3b8e6"
+# 签名盐值 — 从在线端网页 JS 逆向获取 (index.fd387e5a.js)
+# JS 源码: e.signature = md5(param + "yph1234567890" + e.timeStamp)
+# 缴费端盐值未独立验证，暂沿用同一盐值（同一后端基础设施）
+SIGN_SALT = "yph1234567890"
 
-# 传感器类型定义（基于 HAR 抓包数据分析）
-SENSOR_TYPES = {
-    # === 余额/费用类 ===
-    "balance": {
-        "name": "账户余额",
-        "unit": "CNY",
-        "icon": "mdi:currency-cny",
-        "device_class": "monetary",
-        "api_field": "qtyBalance",
-        "description": "账户余额（负数表示欠费）",
-    },
-    "owed_amount": {
-        "name": "欠费金额",
-        "unit": "CNY",
-        "icon": "mdi:alert-circle",
-        "device_class": "monetary",
-        "api_field": "oweMoney",
-        "description": "账户欠费金额",
-    },
-    "new_owe_money": {
-        "name": "最新欠费",
-        "unit": "CNY",
-        "icon": "mdi:alert-circle-outline",
-        "device_class": "monetary",
-        "api_field": "newOweMoney",
-        "description": "最新欠费金额",
-    },
-    "award_money": {
-        "name": "奖励金额",
-        "unit": "CNY",
-        "icon": "mdi:gift",
-        "device_class": "monetary",
-        "api_field": "awardMoney",
-        "description": "奖励/返利金额",
-    },
-    "monthly_cost": {
-        "name": "月度费用",
-        "unit": "CNY",
-        "icon": "mdi:calculator",
-        "device_class": "monetary",
-        "api_field": "countMoney",
-        "description": "当月累计费用",
-    },
-    "fee": {
-        "name": "当前账单",
-        "unit": "CNY",
-        "icon": "mdi:receipt",
-        "device_class": "monetary",
-        "api_field": "fee",
-        "description": "当前账单金额",
-    },
-
-    # === 用量/气量类 ===
-    "monthly_usage": {
-        "name": "月度用量",
-        "unit": "m³",
-        "icon": "mdi:fire",
-        "device_class": "gas",
-        "api_field": "monthlyUsage",
-        "description": "当月累计用气量",
-    },
-    "meter_reading": {
-        "name": "表读数",
-        "unit": "m³",
-        "icon": "mdi:gauge",
-        "device_class": "gas",
-        "api_field": "lastRecord",
-        "description": "累计表读数",
-    },
-    "gas_balance": {
-        "name": "气量余额",
-        "unit": "m³",
-        "icon": "mdi:gas-cylinder",
-        "device_class": "gas",
-        "api_field": "qtyMeterBalance",
-        "description": "气量余额（智能表）",
-    },
-    "max_gas": {
-        "name": "最大购气量",
-        "unit": "m³",
-        "icon": "mdi:arrow-up-bold",
-        "device_class": "gas",
-        "api_field": "maxGas",
-        "description": "最大允许购气量",
-    },
-
-    # === 价格类 ===
-    "gas_price": {
-        "name": "燃气单价",
-        "unit": "CNY",
-        "icon": "mdi:currency-usd",
-        "device_class": "monetary",
-        "api_field": "price",
-        "description": "当前燃气单价",
-    },
-
-    # === 次数/计数类 ===
-    "purch_times": {
-        "name": "购气次数",
-        "unit": None,
-        "icon": "mdi:counter",
-        "device_class": None,
-        "api_field": "purchTimes",
-        "description": "累计购气次数",
-    },
-
-    # === 时间类 ===
-    "last_record_time": {
-        "name": "最后抄表日期",
-        "unit": None,
-        "icon": "mdi:calendar-clock",
-        "device_class": "timestamp",
-        "api_field": "lastRecordTime",
-        "description": "上次抄表时间",
-    },
-
-    # === 信息类 ===
-    "card_type": {
-        "name": "卡类型",
-        "unit": None,
-        "icon": "mdi:card-account-details",
-        "device_class": None,
-        "api_field": "cardType",
-        "description": "燃气卡类型",
-    },
-    "card_no": {
-        "name": "卡号",
-        "unit": None,
-        "icon": "mdi:numeric",
-        "device_class": None,
-        "api_field": "cardNo",
-        "description": "燃气卡号",
-    },
-    "meter_type": {
-        "name": "燃气表类型",
-        "unit": None,
-        "icon": "mdi:meter-electric",
-        "device_class": None,
-        "api_field": "metertype",
-        "description": "燃气表类型",
-    },
-    "meter_form_name": {
-        "name": "燃气表型号",
-        "unit": None,
-        "icon": "mdi:meter-gas",
-        "device_class": None,
-        "api_field": "meterFormName",
-        "description": "燃气表型号名称",
-    },
-    "cust_status": {
-        "name": "客户状态",
-        "unit": None,
-        "icon": "mdi:account-check",
-        "device_class": None,
-        "api_field": "custStatus",
-        "description": "客户账户状态",
-    },
-    "cust_type": {
-        "name": "客户类型",
-        "unit": None,
-        "icon": "mdi:account-group",
-        "device_class": None,
-        "api_field": "custType",
-        "description": "客户类型",
-    },
-    "vent_date": {
-        "name": "通气日期",
-        "unit": None,
-        "icon": "mdi:calendar-start",
-        "device_class": "timestamp",
-        "api_field": "ventDate",
-        "description": "通气日期",
-    },
-    "bar_code": {
-        "name": "表具条码",
-        "unit": None,
-        "icon": "mdi:barcode",
-        "device_class": None,
-        "api_field": "barCode",
-        "description": "燃气表条形码",
-    },
-    "meter_loc": {
-        "name": "表具位置",
-        "unit": None,
-        "icon": "mdi:map-marker",
-        "device_class": None,
-        "api_field": "meterloc",
-        "description": "燃气表安装位置",
-    },
-
-    # === 与旧版 zr-gas-ha 兼容的传感器别名 ===
-    "purchase_count": {
-        "name": "购气次数",
-        "unit": "次",
-        "icon": "mdi:counter",
-        "device_class": None,
-        "api_field": "purchTimes",
-        "description": "累计购气次数（兼容旧版）",
-    },
-}
-
-# 默认配置（与旧版 zr-gas-ha 兼容）
-DEFAULT_SCAN_INTERVAL = 21600  # 6小时（与旧版兼容）
-MIN_SCAN_INTERVAL = 300  # 最小刷新间隔（5分钟）
-
-# === 与旧版 zr-gas-ha 兼容的传感器别名 ===
-# 旧版名称 -> 新版名称 映射
-SENSOR_ALIASES = {
-    # 余额/费用类
-    "owe_money": "owed_amount",  # 兼容旧版 owe_money
-    "monthly_usage": "monthly_usage",  # 兼容
-    "monthly_cost": "monthly_cost",  # 兼容
-    "gas_balance": "gas_balance",  # 兼容
-    "purchase_count": "purch_times",  # 兼容旧版 purchase_count
-    # 阶梯类（需要额外实现）
-    "annual_usage": "annual_usage",
-    "current_tier": "current_tier",
-    "tier_price": "tier_price",
-}
-
-# === 阶梯气价配置 ===
-# 与旧版 zr-gas-ha 配置兼容
-TIERED_PRICING = {
-    "tier1_threshold": 0,       # 第一档起始量 (m³)
-    "tier2_threshold": 400,      # 第二档起始量 (m³)
-    "tier3_threshold": 1680,     # 第三档起始量 (m³)
-    "tier1_price": 2.99,        # 第一档单价 (元/m³)
-    "tier2_price": 3.44,        # 第二档单价 (元/m³)
-    "tier3_price": 4.34,        # 第三档单价 (元/m³)
-    "cycle_start_month": "01",   # 阶梯周期起始月份
-    "cycle_start_day": "01",    # 阶梯周期起始日期
-}
-
-# 错误码映射
-ERROR_CODES = {
-    "0": "成功",
-    "1": "成功",
-    "10000": "成功",
-    "10001": "系统错误",
-    "10002": "参数错误",
-    "20001": "用户未登录",
-    "20002": "Token无效",
-    "20003": "Token过期",
-    "255": "认证失败，请检查Token和userId是否正确",
-    "30001": "账户不存在",
-    "30002": "账户已绑定",
-    "40001": "验证码错误",
-    "40002": "验证码过期",
-}
+# x-mas-app-info SID 前缀 (from loginOK handler in pages-login-login.js)
+# JS: e.sid && (e.sid = "aaahg10001/" + e.sid)
+X_MAS_SID_PREFIX = "aaahg10001/"

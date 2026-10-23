@@ -1,25 +1,22 @@
 """Button platform for the 中燃在线 (ZR Gas) integration.
 
-Provides a refresh button for each gas customer account, allowing users to
-manually trigger data updates from the Home Assistant UI.
+Provides a refresh button for each gas customer account,
+allowing users to manually trigger a data update from the
+HA UI without waiting for the scheduled refresh.
 """
 
 from __future__ import annotations
 
 import logging
 
-from homeassistant.components.button import (
-    AddEntitiesCallback,
-    ButtonEntity,
-    ButtonEntityDescription,
-)
+from homeassistant.components.button import ButtonEntity, ButtonEntityDescription
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from . import ZrGasCoordinator
-from .const import DOMAIN
+from . import ZrGasDataUpdateCoordinator
+from .const import DOMAIN, SOURCE_PAY
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -30,40 +27,38 @@ REFRESH_DESCRIPTION = ButtonEntityDescription(
 )
 
 
-class ZrGasRefreshButton(CoordinatorEntity[ZrGasCoordinator], ButtonEntity):
+class ZrGasRefreshButton(CoordinatorEntity[ZrGasDataUpdateCoordinator], ButtonEntity):
     """Button entity to manually refresh gas account data.
 
     Pressing this button triggers an immediate data refresh
     for the associated gas customer account.
     """
 
+    entity_description = REFRESH_DESCRIPTION
+    _attr_has_entity_name = True
+
     def __init__(
         self,
-        coordinator: ZrGasCoordinator,
+        coordinator: ZrGasDataUpdateCoordinator,
         cust_code: str,
+        source: str,
     ) -> None:
-        """Initialize the button entity.
+        """Initialize the refresh button.
 
         Args:
-            coordinator: Data update coordinator.
-            cust_code: Customer code associated with this button.
+            coordinator: Data update coordinator for this customer.
+            cust_code: Full customer code.
+            source: Data source (在线端 mp / 缴费端 pay).
         """
         super().__init__(coordinator)
         self._cust_code = cust_code
-        self._attr_unique_id = f"zr_gas_{cust_code}_refresh"
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, cust_code)},
-        )
-
-    @property
-    def name(self) -> str:
-        """Return the name of the entity."""
-        return f"{self._cust_code} Refresh"
-
-    @property
-    def translation_key(self) -> str:
-        """Return translation key for the entity."""
-        return REFRESH_DESCRIPTION.translation_key
+        # 与传感器保持一致：缴费端加来源前缀，在线端沿用历史 ID
+        id_prefix = "zr_gas_pay_" if source == SOURCE_PAY else "zr_gas_"
+        self._attr_unique_id = f"{id_prefix}{cust_code}_refresh"
+        device_key = f"pay_{cust_code}" if source == SOURCE_PAY else cust_code
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, device_key)},
+        }
 
     async def async_press(self) -> None:
         """Handle button press — trigger a data refresh."""
@@ -76,17 +71,23 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up the button platform for each customer account.
+    """Set up the 中燃在线 button platform.
 
-    Args:
-        hass: Home Assistant instance.
-        entry: Config entry for the integration.
-        async_add_entities: Callback to add entities.
+    Creates a refresh button for each bound gas customer account.
     """
-    coordinator: ZrGasCoordinator = entry.runtime_data
-    cust_code = entry.data.get("cust_code", "unknown")
+    entry_data = hass.data[DOMAIN][entry.entry_id]
+    coordinators: dict[str, ZrGasDataUpdateCoordinator] = entry_data.get("coordinators", {})
+    source = entry_data.get("source", entry.data.get("source", "mp"))
 
-    entity = ZrGasRefreshButton(coordinator, cust_code)
+    entities: list[ButtonEntity] = []
 
-    async_add_entities([entity])
-    _LOGGER.info("Added refresh button for %s", cust_code)
+    for cust_code, coordinator in coordinators.items():
+        entities.append(
+            ZrGasRefreshButton(
+                coordinator=coordinator,
+                cust_code=cust_code,
+                source=source,
+            )
+        )
+
+    async_add_entities(entities, update_before_add=True)

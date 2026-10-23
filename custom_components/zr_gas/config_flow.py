@@ -1,302 +1,731 @@
-"""中燃在线集成 - 配置流
+"""Config flow for the 中燃在线 (ZR Gas) integration.
 
-实现步骤:
-1. 选择认证方式（短信验证码 / Token 直接导入）
-2A. 短信登录表单（手机号 + 验证码）
-2B. Token 导入表单
-3. 账户列表和绑定确认
+Two data sources of the same backend are supported (see ``api.py``):
+
+- **在线端 (mp)** — SMS login (mobile + captcha + SMS code) or token import
+- **缴费端 (pay)** — token import only (its SMS login endpoints are
+  gateway-blocked, verified live 2026-10)
+
+Flow: user (source + auth method + mobile) → [captcha → sms_code | token] →
+discover → entry. Includes a ReauthFlow (在线端 re-uses SMS login; 缴费端
+asks for a fresh token import) and an OptionsFlow.
 """
 
+from __future__ import annotations
+
 import logging
-from typing import Any, Dict, List, Optional
+import os
+import re
+import time
+from typing import Any
 
 import aiohttp
 import voluptuous as vol
 from homeassistant import config_entries
-from homeassistant.const import CONF_TOKEN, CONF_USERNAME
-from homeassistant.core import callback
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import FlowResult
+from homeassistant.helpers.aiohttp_client import (
+    async_create_clientsession,
+    async_get_clientsession,
+)
 
-from .api import ZrGasApiClient, ZrGasApiError, ZrGasAuthError
-from .const import DOMAIN, NAME
+from .api import ZrGasAuthError, ZrGasMpApi, ZrGasPayApi, ZrGasSmsError
+from .const import (
+    CONF_ACCESS_TOKEN,
+    CONF_BALANCE_THRESHOLD,
+    CONF_BILL_YEARS,
+    CONF_CUSTOMERS,
+    CONF_MOBILE,
+    CONF_SOURCE,
+    CONF_TIER_1_PRICE,
+    CONF_TIER_2_PRICE,
+    CONF_TIER_2_START,
+    CONF_TIER_3_PRICE,
+    CONF_TIER_3_START,
+    CONF_TIER_CYCLE_START,
+    CONF_UPDATE_INTERVAL,
+    CONF_USER_ID,
+    CONF_X_MAS_APP_INFO,
+    DEFAULT_BALANCE_THRESHOLD,
+    DEFAULT_BILL_YEARS,
+    DEFAULT_TIER_1_PRICE,
+    DEFAULT_TIER_2_PRICE,
+    DEFAULT_TIER_2_START,
+    DEFAULT_TIER_3_PRICE,
+    DEFAULT_TIER_3_START,
+    DEFAULT_TIER_CYCLE_START,
+    DEFAULT_UPDATE_INTERVAL,
+    DOMAIN,
+    SOURCE_MP,
+    SOURCE_PAY,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
-# 配置步骤
-STEP_AUTH_METHOD = "auth_method"
-STEP_SMS_LOGIN = "sms_login"
-STEP_TOKEN_IMPORT = "token_import"
-STEP_TOKEN_WEB = "token_web"
-STEP_ACCOUNT_LIST = "account_list"
+# Directory to store temporary captcha images served via HA's /local/ path
+_CAPTCHA_DIR = "www/zr_gas_captcha"
 
 
-class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    """配置流处理器"""
+async def _fetch_and_save_captcha(hass: HomeAssistant, api: ZrGasMpApi, mobile: str) -> str | None:
+    """Fetch captcha image via the login session and save to www/ for serving.
 
-    VERSION = 1
+    This ensures the SAME aiohttp session that will later call send_sms_code
+    also makes the captcha GET request, so JSESSIONID cookie is consistent.
 
-    def __init__(self):
-        self._api_client: Optional[ZrGasApiClient] = None
-        self._session: Optional[aiohttp.ClientSession] = None
-        self._auth_data: Dict[str, Any] = {}
-        self._accounts: List[Dict[str, Any]] = []
-        self._phone: str = ""
-        self._token_type: str = "weixin"  # 默认微信小程序
+    Returns:
+        The /local/ URL for the saved image, or None on failure.
+    """
+    # Ensure www/zr_gas_captcha/ directory exists
+    captcha_dir = os.path.join(hass.config.config_dir, _CAPTCHA_DIR)
+    os.makedirs(captcha_dir, exist_ok=True)
 
-    async def async_step_user(self, user_input: Optional[Dict[str, Any]] = None) -> FlowResult:
-        """步骤0: 选择认证方式"""
-        errors: Dict[str, str] = {}
+    # Fetch captcha image using the SAME session as send_sms_code
+    captcha_url = api.get_captcha_url(mobile)
+    headers = {
+        "Accept": "image/webp,image/apng,image/*,*/*;q=0.8",
+        "Accept-Language": "zh-CN,zh;q=0.9",
+        "Referer": "https://servicewechat.com/wx19c4e29f3ef6b4a0/91/page-frame.html",
+    }
+
+    try:
+        # Use the login session (with real CookieJar) so that cookies
+        # from this GET request persist for send_sms_code / login_with_sms
+        login_session = api._get_login_session()
+        async with login_session.get(captcha_url, headers=headers) as resp:
+            resp.raise_for_status()
+            image_data = await resp.read()
+        # Debug: log cookies
+        cookie_info = ""
+        for c in login_session.cookie_jar:
+            cookie_info += f"{c.key}={c.value}(path={c['path']}) "
+        _LOGGER.debug(
+            "_fetch_and_save_captcha: %d bytes, cookies=[%s]",
+            len(image_data),
+            cookie_info,
+        )
+    except Exception as err:
+        _LOGGER.warning("Failed to fetch captcha image: %s", err)
+        return None
+
+    # Save to www/zr_gas_captcha/{mobile}.png
+    filepath = os.path.join(captcha_dir, f"{mobile}.png")
+    try:
+
+        def _write_file(path: str, data: bytes) -> None:
+            with open(path, "wb") as f:
+                f.write(data)
+
+        await hass.async_add_executor_job(_write_file, filepath, image_data)
+    except Exception as err:
+        _LOGGER.warning("Failed to save captcha image: %s", err)
+        return None
+
+    ts = str(int(time.time() * 1000))
+    return f"/local/zr_gas_captcha/{mobile}.png?tn={ts}"
+
+
+class ZrGasConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+    """Handle a config flow for 中燃在线.
+
+    Flow: user (source + auth) → source-specific login → discover → entry
+    """
+
+    VERSION = 2
+    MINOR_VERSION = 0
+
+    def __init__(self) -> None:
+        """Initialize the config flow."""
+        self._source: str = SOURCE_MP
+        self._mobile: str = ""
+        self._api: ZrGasMpApi | ZrGasPayApi | None = None
+        self._discovered_customers: list[dict[str, str]] = []
+
+    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        """Step 1: Choose data source and authentication method.
+
+        在线端: SMS login (recommended) or token import.
+        缴费端: token import only — SMS login endpoints are gateway-blocked.
+        """
+        errors: dict[str, str] = {}
 
         if user_input is not None:
-            auth_method = user_input.get("auth_method", STEP_SMS_LOGIN)
-            if auth_method == STEP_SMS_LOGIN:
-                return await self.async_step_sms_login()
-            elif auth_method == STEP_TOKEN_WEB:
-                return await self.async_step_token_import(token_type="web")
+            source = user_input.get(CONF_SOURCE, SOURCE_MP)
+            auth_method = user_input.get("auth_method", "sms")
+            self._source = source
+
+            if auth_method == "token" or source == SOURCE_PAY:
+                return await self.async_step_token()
+
+            mobile = user_input.get(CONF_MOBILE, "").strip()
+
+            # Basic validation: must be 11 digits
+            if not mobile.isdigit() or len(mobile) != 11:
+                errors["base"] = "invalid_mobile"
             else:
-                return await self.async_step_token_import(token_type="weixin")
+                self._mobile = mobile
+                session = async_get_clientsession(self.hass)
+                self._api = ZrGasMpApi(session)
+                # Create an independent session with a REAL CookieJar for the
+                # login flow (HA's shared session uses DummyCookieJar)
+                login_session = async_create_clientsession(
+                    self.hass,
+                    cookie_jar=aiohttp.CookieJar(unsafe=True),
+                )
+                self._api.set_login_session(login_session)
+                return await self.async_step_captcha()
 
         return self.async_show_form(
             step_id="user",
-            data_schema=vol.Schema({
-                vol.Required("auth_method", default=STEP_SMS_LOGIN): vol.In({
-                    STEP_SMS_LOGIN: "短信验证码登录（推荐）",
-                    STEP_TOKEN_WEB: "网页版 Token 导入",
-                    STEP_TOKEN_IMPORT: "微信小程序 Token 导入",
-                }),
-            }),
-            errors=errors,
-            description_placeholders={
-                "name": NAME,
-                "help": "网页版和微信小程序Token不共享，请选择正确的来源",
-            },
-        )
-
-    async def async_step_sms_login(self, user_input: Optional[Dict[str, Any]] = None) -> FlowResult:
-        """步骤1: 短信验证码登录"""
-        errors: Dict[str, str] = {}
-
-        if user_input is not None:
-            phone = user_input.get(CONF_USERNAME, "")
-            sms_code = user_input.get("sms_code", "")
-
-            if not phone:
-                errors["base"] = "phone_required"
-            elif not sms_code:
-                # 仅提供手机号，发送验证码
-                try:
-                    async with aiohttp.ClientSession() as session:
-                        self._api_client = ZrGasApiClient(session)
-                        await self._api_client.send_sms_code(phone)
-                        self._phone = phone
-                    return self.async_show_form(
-                        step_id=STEP_SMS_LOGIN,
-                        data_schema=vol.Schema({
-                            vol.Required(CONF_USERNAME, default=phone): str,
-                            vol.Required("sms_code"): str,
-                        }),
-                        errors=errors,
-                        description_placeholders={
-                            "status": f"验证码已发送至 {phone[:3]}****{phone[-4:]}",
-                        },
-                    )
-                except ZrGasApiError as e:
-                    errors["base"] = "sms_error"
-                    _LOGGER.error(f"发送验证码失败: {e}")
-
-            else:
-                # 验证验证码
-                try:
-                    async with aiohttp.ClientSession() as session:
-                        self._api_client = ZrGasApiClient(session)
-                        auth_result = await self._api_client.verify_sms_code(phone, sms_code)
-                        self._auth_data = {
-                            "token": auth_result.get("token"),
-                            "user_id": auth_result.get("user_id"),
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_SOURCE, default=SOURCE_MP): vol.In(
+                        {
+                            SOURCE_MP: "在线端（推荐，支持短信登录）",
+                            SOURCE_PAY: "缴费端（仅 Token 导入）",
                         }
-
-                    # 获取账户列表
-                    accounts = await self._api_client.get_bind_gas_list()
-                    self._accounts = accounts
-
-                    if not self._accounts:
-                        return self.async_show_form(
-                            step_id=STEP_SMS_LOGIN,
-                            data_schema=vol.Schema({
-                                vol.Required(CONF_USERNAME): str,
-                                vol.Required("sms_code"): str,
-                            }),
-                            errors={"base": "no_accounts"},
-                            description_placeholders={"status": "未找到绑定的燃气账户"},
-                        )
-
-                    return await self.async_step_account_list()
-
-                except ZrGasAuthError as e:
-                    errors["base"] = "auth_error"
-                    _LOGGER.error(f"认证失败: {e}")
-                except ZrGasApiError as e:
-                    errors["base"] = "api_error"
-                    _LOGGER.error(f"API错误: {e}")
-
-        return self.async_show_form(
-            step_id=STEP_SMS_LOGIN,
-            data_schema=vol.Schema({
-                vol.Required(CONF_USERNAME): str,
-                vol.Optional("sms_code"): str,
-            }),
+                    ),
+                    vol.Required("auth_method", default="sms"): vol.In(
+                        {"sms": "短信验证码登录", "token": "Token 导入"}
+                    ),
+                    vol.Optional(CONF_MOBILE): str,
+                }
+            ),
             errors=errors,
-            description_placeholders={
-                "status": "请输入手机号，点击获取验证码后再填写",
-            },
         )
 
-    async def async_step_token_import(self, user_input: Optional[Dict[str, Any]] = None, token_type: str = "weixin") -> FlowResult:
-        """步骤1B: Token 直接导入
+    async def async_step_token(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        """Step 1b: Import a pre-obtained token directly.
 
-        Args:
-            user_input: 用户输入
-            token_type: Token类型 "web"(网页版) 或 "weixin"(微信小程序)
+        Allows users to skip SMS verification by pasting a token
+        obtained from the corresponding mini-program via packet capture.
         """
-        errors: Dict[str, str] = {}
-        self._token_type = token_type
+        errors: dict[str, str] = {}
 
         if user_input is not None:
-            token = user_input.get(CONF_TOKEN, "")
-            user_id = user_input.get("user_id", "")
+            access_token = user_input.get(CONF_ACCESS_TOKEN, "").strip()
+            user_id = user_input.get(CONF_USER_ID, "").strip()
+            x_mas_app_info = user_input.get(CONF_X_MAS_APP_INFO, "").strip()
+            mobile = user_input.get(CONF_MOBILE, "").strip()
 
-            if not token:
+            if not access_token or not user_id:
                 errors["base"] = "token_required"
             else:
+                session = async_get_clientsession(self.hass)
+                if self._source == SOURCE_PAY:
+                    self._api = ZrGasPayApi(
+                        session,
+                        access_token=access_token,
+                        user_id=user_id,
+                    )
+                else:
+                    self._api = ZrGasMpApi(
+                        session,
+                        access_token=access_token,
+                        user_id=user_id,
+                        x_mas_app_info=x_mas_app_info,
+                    )
+                self._mobile = mobile
+
+                # Validate token via check_token
                 try:
-                    async with aiohttp.ClientSession() as session:
-                        self._api_client = ZrGasApiClient(session, token=token, user_id=user_id)
-                        self._auth_data = {
-                            "token": token,
-                            "user_id": user_id,
-                            "token_type": token_type,
-                        }
-
-                        # 简化逻辑：直接尝试获取账户列表
-                        try:
-                            is_valid = await self._api_client.verify_web_token()
-                            _LOGGER.debug(f"verify_web_token结果: {is_valid}")
-                        except Exception as e:
-                            _LOGGER.debug(f"verify_web_token异常: {e}")
-                            is_valid = False
-
-                        # 无论验证结果如何，直接尝试获取账户列表
-                        accounts = await self._api_client.get_bind_gas_list()
-                        self._accounts = accounts
-
-                    if not self._accounts:
-                        return self.async_show_form(
-                            step_id=STEP_TOKEN_IMPORT,
-                            data_schema=vol.Schema({
-                                vol.Required(CONF_TOKEN): str,
-                                vol.Optional("user_id"): str,
-                            }),
-                            errors={"base": "no_accounts"},
-                            description_placeholders={"status": "Token无效或无绑定账户"},
-                        )
-
-                    return await self.async_step_account_list()
-
-                except ZrGasAuthError as e:
+                    await self._api.check_token()
+                    # Token is valid, proceed to discovery
+                    return await self.async_step_discover()
+                except ZrGasAuthError as err:
+                    _LOGGER.warning("Token validation failed: %s", err)
                     errors["base"] = "invalid_token"
-                    _LOGGER.error(f"Token无效: {e}")
-                except ZrGasApiError as e:
-                    errors["base"] = "api_error"
-                    _LOGGER.error(f"API错误: {e}")
+                except Exception as err:
+                    _LOGGER.error("Token import error: %s", err)
+                    errors["base"] = "connection_error"
+
+        schema_fields: dict[Any, Any] = {
+            vol.Required(CONF_ACCESS_TOKEN): str,
+            vol.Required(CONF_USER_ID): str,
+        }
+        # x-mas-app-info 仅在线端使用
+        if self._source != SOURCE_PAY:
+            schema_fields[vol.Optional(CONF_X_MAS_APP_INFO)] = str
+        schema_fields[vol.Optional(CONF_MOBILE)] = str
 
         return self.async_show_form(
-            step_id=STEP_TOKEN_IMPORT,
-            data_schema=vol.Schema({
-                vol.Required(CONF_TOKEN): str,
-                vol.Optional("user_id"): str,
-            }),
+            step_id="token",
+            data_schema=vol.Schema(schema_fields),
             errors=errors,
             description_placeholders={
-                "help": "从抓包数据中获取 accessToken 和 userId",
+                "source_label": "缴费端" if self._source == SOURCE_PAY else "在线端",
             },
         )
 
-    async def async_step_account_list(self, user_input: Optional[Dict[str, Any]] = None) -> FlowResult:
-        """步骤2: 账户列表选择"""
-        errors: Dict[str, str] = {}
+    async def async_step_captcha(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        """Step 2 (在线端): View captcha image, enter captcha code, send SMS.
+
+        The captcha image is fetched by the login session (same one
+        used for send_sms_code), saved to www/zr_gas_captcha/, and
+        served via HA's built-in /local/ static file path.
+        This ensures JSESSIONID cookie consistency.
+        """
+        errors: dict[str, str] = {}
+        description_placeholders: dict[str, str] = {}
+
+        # Handle form submission
+        if user_input is not None:
+            captcha_code = user_input.get("captcha_code", "").strip()
+
+            if not captcha_code or len(captcha_code) < 4:
+                errors["base"] = "captcha_required"
+            elif not self._api:
+                errors["base"] = "connection_error"
+            else:
+                try:
+                    await self._api.send_sms_code(self._mobile, captcha_code)
+                    # SMS sent successfully — proceed to SMS code input
+                    return await self.async_step_sms_code()
+                except ZrGasSmsError as err:
+                    _LOGGER.warning("SMS send failed: %s", err)
+                    errors["base"] = "sms_send_failed"
+                    # Refresh captcha on failure
+                    captcha_local_url = await _fetch_and_save_captcha(
+                        self.hass, self._api, self._mobile
+                    )
+                    if captcha_local_url:
+                        description_placeholders["link_left"] = (
+                            f'<a href="{captcha_local_url}" target="_blank">'
+                        )
+                        description_placeholders["link_right"] = "</a>"
+                except Exception as err:
+                    _LOGGER.error("Unexpected error sending SMS: %s", err)
+                    errors["base"] = "connection_error"
+
+        # Fetch captcha and build link (only when no link yet,
+        # i.e. first display or after failed submission refresh)
+        if not description_placeholders.get("link_left") and self._api:
+            captcha_local_url = await _fetch_and_save_captcha(self.hass, self._api, self._mobile)
+            if captcha_local_url:
+                description_placeholders["link_left"] = (
+                    f'<a href="{captcha_local_url}" target="_blank">'
+                )
+                description_placeholders["link_right"] = "</a>"
+            else:
+                captcha_url = self._api.get_captcha_url(self._mobile)
+                description_placeholders["link_left"] = f'<a href="{captcha_url}" target="_blank">'
+                description_placeholders["link_right"] = "</a>"
+
+        return self.async_show_form(
+            step_id="captcha",
+            data_schema=vol.Schema(
+                {
+                    vol.Required("captcha_code"): str,
+                }
+            ),
+            errors=errors,
+            description_placeholders=description_placeholders,
+        )
+
+    async def async_step_sms_code(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        """Step 3 (在线端): Enter SMS verification code to login."""
+        errors: dict[str, str] = {}
 
         if user_input is not None:
-            selected_codes = user_input.get("accounts", [])
+            sms_code = user_input.get("sms_code", "").strip()
 
-            if not selected_codes:
-                errors["base"] = "select_required"
+            if not sms_code:
+                errors["base"] = "sms_code_required"
+            elif not self._api:
+                errors["base"] = "connection_error"
             else:
-                # 获取第一个选中账户的完整信息
-                selected_code = selected_codes[0]
-                account_data = next(
-                    (acc for acc in self._accounts if acc.get("custCode") == selected_code),
-                    self._accounts[0] if self._accounts else {},
-                )
-
-                return await self._create_entry(account_data)
-
-        # 生成账户选项
-        account_options = {
-            acc.get("custCode", idx): f"{acc.get('meterNo', '未知表号')} - {acc.get('address', '未知地址')[:20]}..."
-            for idx, acc in enumerate(self._accounts)
-        }
+                try:
+                    await self._api.login_with_sms(self._mobile, sms_code)
+                    # Login successful — proceed to account discovery
+                    return await self.async_step_discover()
+                except ZrGasAuthError as err:
+                    _LOGGER.warning("SMS login failed: %s", err)
+                    errors["base"] = "invalid_sms_code"
+                except Exception as err:
+                    _LOGGER.error("Unexpected error during login: %s", err)
+                    errors["base"] = "connection_error"
 
         return self.async_show_form(
-            step_id=STEP_ACCOUNT_LIST,
-            data_schema=vol.Schema({
-                vol.Required("accounts"): [vol.In(list(account_options.keys()))],
-            }),
+            step_id="sms_code",
+            data_schema=vol.Schema(
+                {
+                    vol.Required("sms_code"): str,
+                }
+            ),
             errors=errors,
-            description_placeholders={
-                "count": str(len(self._accounts)),
-            },
         )
 
-    async def _create_entry(self, account: Dict[str, Any]) -> FlowResult:
-        """创建配置条目"""
-        cust_code = account.get("custCode", "default")
-        title = f"{NAME} - {account.get('meterNo', cust_code)}"
+    async def async_step_discover(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        """Step 4: Discover bound gas accounts and create entry."""
+        errors: dict[str, str] = {}
 
-        data = {
-            **self._auth_data,
-            "cust_code": cust_code,
-            "account": account,
-        }
+        if not self._api:
+            errors["base"] = "connection_error"
+            return self.async_show_form(
+                step_id="discover",
+                errors=errors,
+                description_placeholders={"count": "0"},
+            )
 
-        await self.async_set_unique_id(f"{DOMAIN}_{cust_code}")
+        # init_request 仅存在于在线端客户端，且为尽力而为的埋点请求
+        if hasattr(self._api, "init_request"):
+            try:
+                await self._api.init_request(self._api.user_id)
+            except Exception:
+                _LOGGER.debug("Init request failed, continuing to discovery")
+        try:
+            customers = await self._api.get_bind_gas_cust_list(self._api.user_id)
+        except ZrGasAuthError as err:
+            _LOGGER.error("Auth error during discovery: %s", err)
+            errors["base"] = "invalid_token"
+            return self.async_show_form(
+                step_id="discover",
+                errors=errors,
+                description_placeholders={"count": "0"},
+            )
+        except Exception as err:
+            _LOGGER.error("API error during discovery: %s", err)
+            errors["base"] = "connection_error"
+            return self.async_show_form(
+                step_id="discover",
+                errors=errors,
+                description_placeholders={"count": "0"},
+            )
+
+        if not customers:
+            errors["base"] = "no_accounts"
+            return self.async_show_form(
+                step_id="discover",
+                errors=errors,
+                description_placeholders={"count": "0"},
+            )
+
+        # Store discovered customers
+        self._discovered_customers = [
+            {"cust_code": c.cust_code, "cust_name": c.cust_name} for c in customers
+        ]
+
+        source_label = "缴费端" if self._source == SOURCE_PAY else "在线端"
+        primary_name = f"{source_label} {customers[0].cust_name or '中燃在线'}"
+        user_id = self._api.user_id or self._mobile
+
+        # Deduplicate by source + user_id (mobile number)
+        await self.async_set_unique_id(f"{self._source}_{user_id}")
         self._abort_if_unique_id_configured()
 
-        return self.async_create_entry(title=title, data=data)
+        # Close the independent login session
+        if self._api:
+            await self._api.close_login_session()
+
+        return self.async_create_entry(
+            title=primary_name,
+            data={
+                CONF_SOURCE: self._source,
+                CONF_ACCESS_TOKEN: self._api.access_token,
+                CONF_USER_ID: self._api.user_id,
+                CONF_X_MAS_APP_INFO: self._api.x_mas_app_info,
+                CONF_MOBILE: self._mobile,
+                CONF_CUSTOMERS: self._discovered_customers,
+            },
+            options={
+                CONF_UPDATE_INTERVAL: DEFAULT_UPDATE_INTERVAL,
+                CONF_BALANCE_THRESHOLD: DEFAULT_BALANCE_THRESHOLD,
+            },
+        )
+
+    # ── Reauth Flow ─────────────────────────────────────────────────
+
+    async def async_step_reauth(self, entry_data: dict[str, Any]) -> FlowResult:
+        """Handle reauthorization when the token expires.
+
+        在线端 re-uses the SMS login flow; 缴费端 requires a fresh
+        token import (its login endpoints are gateway-blocked).
+        """
+        self._source = entry_data.get(CONF_SOURCE, SOURCE_MP)
+        self._mobile = entry_data.get(CONF_MOBILE, "")
+        session = async_get_clientsession(self.hass)
+
+        if self._source == SOURCE_PAY:
+            # 缴费端: 直接引导重新导入 Token
+            self._api = None
+            return await self.async_step_reauth_token()
+
+        # 在线端: 短信重新登录
+        self._api = ZrGasMpApi(session)
+        # Create an independent session with a REAL CookieJar for the
+        # login flow (same reason as async_step_user)
+        login_session = async_create_clientsession(
+            self.hass,
+            cookie_jar=aiohttp.CookieJar(unsafe=True),
+        )
+        self._api.set_login_session(login_session)
+        return await self.async_step_reauth_captcha()
+
+    async def async_step_reauth_token(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        """Reauth (缴费端): import a fresh token for the existing entry."""
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            access_token = user_input.get(CONF_ACCESS_TOKEN, "").strip()
+            user_id = user_input.get(CONF_USER_ID, "").strip()
+
+            if not access_token or not user_id:
+                errors["base"] = "token_required"
+            else:
+                session = async_get_clientsession(self.hass)
+                api = ZrGasPayApi(session, access_token=access_token, user_id=user_id)
+                try:
+                    await api.check_token()
+                    entry_id = self.context.get("entry_id")
+                    entry = self.hass.config_entries.async_get_entry(entry_id) if entry_id else None
+                    if entry:
+                        self.hass.config_entries.async_update_entry(
+                            entry,
+                            data={
+                                **entry.data,
+                                CONF_ACCESS_TOKEN: access_token,
+                                CONF_USER_ID: user_id,
+                            },
+                        )
+                    return self.async_abort(reason="reauth_successful")
+                except ZrGasAuthError as err:
+                    _LOGGER.warning("Reauth token validation failed: %s", err)
+                    errors["base"] = "invalid_token"
+                except Exception as err:
+                    _LOGGER.error("Reauth token error: %s", err)
+                    errors["base"] = "connection_error"
+
+        return self.async_show_form(
+            step_id="reauth_token",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_ACCESS_TOKEN): str,
+                    vol.Required(CONF_USER_ID): str,
+                }
+            ),
+            errors=errors,
+        )
+
+    async def async_step_reauth_captcha(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Reauth step 1 (在线端): View captcha image, enter code, send SMS."""
+        errors: dict[str, str] = {}
+        description_placeholders: dict[str, str] = {}
+
+        # Always set mobile placeholder
+        description_placeholders["mobile"] = (
+            f"{self._mobile[:3]}****{self._mobile[-4:]}"
+            if len(self._mobile) == 11
+            else self._mobile
+        )
+
+        if not self._api:
+            errors["base"] = "connection_error"
+
+        # Handle form submission first
+        if user_input is not None and self._api:
+            captcha_code = user_input.get("captcha_code", "").strip()
+
+            if not captcha_code or len(captcha_code) < 4:
+                errors["base"] = "captcha_required"
+            else:
+                try:
+                    await self._api.send_sms_code(self._mobile, captcha_code)
+                    # SMS sent — proceed to SMS code input
+                    return await self.async_step_reauth_sms_code()
+                except ZrGasSmsError as err:
+                    _LOGGER.warning("SMS send failed: %s", err)
+                    errors["base"] = "sms_send_failed"
+                    # Refresh captcha on failure
+                    captcha_local_url = await _fetch_and_save_captcha(
+                        self.hass, self._api, self._mobile
+                    )
+                    if captcha_local_url:
+                        description_placeholders["link_left"] = (
+                            f'<a href="{captcha_local_url}" target="_blank">'
+                        )
+                        description_placeholders["link_right"] = "</a>"
+                except Exception as err:
+                    _LOGGER.error("Unexpected error sending SMS: %s", err)
+                    errors["base"] = "connection_error"
+
+        # Fetch captcha and build link (first display or after failure refresh)
+        if not description_placeholders.get("link_left") and self._api:
+            captcha_local_url = await _fetch_and_save_captcha(self.hass, self._api, self._mobile)
+            if captcha_local_url:
+                description_placeholders["link_left"] = (
+                    f'<a href="{captcha_local_url}" target="_blank">'
+                )
+                description_placeholders["link_right"] = "</a>"
+            else:
+                captcha_url = self._api.get_captcha_url(self._mobile)
+                description_placeholders["link_left"] = f'<a href="{captcha_url}" target="_blank">'
+                description_placeholders["link_right"] = "</a>"
+
+        return self.async_show_form(
+            step_id="reauth_captcha",
+            data_schema=vol.Schema(
+                {
+                    vol.Required("captcha_code"): str,
+                }
+            ),
+            errors=errors,
+            description_placeholders=description_placeholders,
+        )
+
+    async def async_step_reauth_sms_code(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Reauth step 2 (在线端): Enter SMS code to get a new token."""
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            sms_code = user_input.get("sms_code", "").strip()
+
+            if not sms_code:
+                errors["base"] = "sms_code_required"
+            elif not self._api:
+                errors["base"] = "connection_error"
+            else:
+                try:
+                    await self._api.login_with_sms(self._mobile, sms_code)
+
+                    # Update the existing entry with new credentials
+                    entry_id = self.context.get("entry_id")
+                    entry = self.hass.config_entries.async_get_entry(entry_id) if entry_id else None
+                    if entry:
+                        self.hass.config_entries.async_update_entry(
+                            entry,
+                            data={
+                                **entry.data,
+                                CONF_ACCESS_TOKEN: self._api.access_token,
+                                CONF_USER_ID: self._api.user_id,
+                                CONF_X_MAS_APP_INFO: self._api.x_mas_app_info,
+                            },
+                        )
+                    # Close the independent login session
+                    if self._api:
+                        await self._api.close_login_session()
+                    return self.async_abort(reason="reauth_successful")
+
+                except ZrGasAuthError as err:
+                    _LOGGER.warning("Reauth login failed: %s", err)
+                    errors["base"] = "invalid_sms_code"
+                except Exception as err:
+                    _LOGGER.error("Unexpected error during reauth: %s", err)
+                    errors["base"] = "connection_error"
+
+        return self.async_show_form(
+            step_id="reauth_sms_code",
+            data_schema=vol.Schema(
+                {
+                    vol.Required("sms_code"): str,
+                }
+            ),
+            errors=errors,
+        )
+
+    # ── Options Flow ─────────────────────────────────────────────────
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(
+        config_entry: config_entries.ConfigEntry,
+    ) -> ZrGasOptionsFlow:
+        """Get the options flow for this handler."""
+        return ZrGasOptionsFlow(config_entry)
 
 
-@callback
-def _async_get_options_flow(config_entry):
-    """获取选项流"""
-    return ZrGasOptionsFlowHandler(config_entry)
+class ZrGasOptionsFlow(config_entries.OptionsFlow):
+    """Handle options flow for 中燃在线 integration.
 
+    Allows users to update:
+    - Data refresh interval (seconds)
+    - Balance alert threshold (CNY)
+    - Bill query range (years)
+    - Tiered gas pricing parameters
+    """
 
-class ZrGasOptionsFlowHandler(config_entries.OptionsFlow):
-    """选项处理器"""
-
-    def __init__(self, config_entry):
+    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
+        """Initialize options flow."""
         self._config_entry = config_entry
 
-    async def async_step_init(self, user_input: Optional[Dict[str, Any]] = None) -> FlowResult:
-        """初始化选项"""
+    async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        """Manage the options."""
+        errors: dict[str, str] = {}
+
         if user_input is not None:
-            return self.async_create_entry(title="", data=user_input)
+            # Validate tier ordering
+            tier_2 = user_input.get(CONF_TIER_2_START, DEFAULT_TIER_2_START)
+            tier_3 = user_input.get(CONF_TIER_3_START, DEFAULT_TIER_3_START)
+            if tier_3 <= tier_2:
+                errors["base"] = "invalid_tier_config"
+
+            # Validate cycle start format
+            cycle_start = user_input.get(CONF_TIER_CYCLE_START, DEFAULT_TIER_CYCLE_START)
+            if not re.match(r"^\d{2}-\d{2}$", cycle_start):
+                errors["base"] = "invalid_tier_cycle_format"
+
+            if not errors:
+                return self.async_create_entry(title="", data=user_input)
 
         return self.async_show_form(
             step_id="init",
-            data_schema=vol.Schema({
-                vol.Optional(
-                    "scan_interval",
-                    default=self._config_entry.options.get("scan_interval", 1800),
-                ): vol.All(vol.Coerce(int), vol.Range(min=300, max=86400)),
-            }),
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(
+                        CONF_UPDATE_INTERVAL,
+                        default=self._config_entry.options.get(
+                            CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL
+                        ),
+                    ): vol.All(int, vol.Range(min=300)),
+                    vol.Optional(
+                        CONF_BALANCE_THRESHOLD,
+                        default=self._config_entry.options.get(
+                            CONF_BALANCE_THRESHOLD, DEFAULT_BALANCE_THRESHOLD
+                        ),
+                    ): vol.All(float, vol.Range(min=0)),
+                    vol.Optional(
+                        CONF_BILL_YEARS,
+                        default=self._config_entry.options.get(CONF_BILL_YEARS, DEFAULT_BILL_YEARS),
+                    ): vol.All(int, vol.Range(min=1, max=5)),
+                    vol.Optional(
+                        CONF_TIER_2_START,
+                        default=self._config_entry.options.get(
+                            CONF_TIER_2_START, DEFAULT_TIER_2_START
+                        ),
+                    ): vol.All(int, vol.Range(min=1)),
+                    vol.Optional(
+                        CONF_TIER_3_START,
+                        default=self._config_entry.options.get(
+                            CONF_TIER_3_START, DEFAULT_TIER_3_START
+                        ),
+                    ): vol.All(int, vol.Range(min=1)),
+                    vol.Optional(
+                        CONF_TIER_1_PRICE,
+                        default=self._config_entry.options.get(
+                            CONF_TIER_1_PRICE, DEFAULT_TIER_1_PRICE
+                        ),
+                    ): vol.All(float, vol.Range(min=0)),
+                    vol.Optional(
+                        CONF_TIER_2_PRICE,
+                        default=self._config_entry.options.get(
+                            CONF_TIER_2_PRICE, DEFAULT_TIER_2_PRICE
+                        ),
+                    ): vol.All(float, vol.Range(min=0)),
+                    vol.Optional(
+                        CONF_TIER_3_PRICE,
+                        default=self._config_entry.options.get(
+                            CONF_TIER_3_PRICE, DEFAULT_TIER_3_PRICE
+                        ),
+                    ): vol.All(float, vol.Range(min=0)),
+                    vol.Optional(
+                        CONF_TIER_CYCLE_START,
+                        default=self._config_entry.options.get(
+                            CONF_TIER_CYCLE_START, DEFAULT_TIER_CYCLE_START
+                        ),
+                    ): str,
+                }
+            ),
+            errors=errors,
         )

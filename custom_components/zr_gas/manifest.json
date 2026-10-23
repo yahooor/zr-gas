@@ -1,13 +1,13 @@
 {
   "domain": "zr_gas",
   "name": "中燃在线",
-  "version": "1.0.13",
   "codeowners": ["@yahooor"],
-  "requirements": [],
-  "dependencies": [],
   "config_flow": true,
-  "documentation": "https://github.com/yahooor/zr-gas",
-  "issue_tracker": "https://github.com/yahooor/zr-gas/issues",
+  "documentation": "https://github.com/yahooor/zr-gas-ha",
+  "integration_type": "device",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/yahooor/zr-gas-ha/issues",
   "loggers": ["custom_components.zr_gas"],
-  "homeassistant": "2024.1.0"
+  "requirements": [],
+  "version": "2.0.0"
 }
