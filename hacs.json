@@ -1,5 +1,7 @@
 {
   "name": "中燃在线",
-  "domains": ["zr_gas"],
-  "report_issues": "https://github.com/yahooor/zr-gas/issues"
+  "content_in_root": false,
+  "country": ["CN"],
+  "homeassistant": "2024.1.0",
+  "render_readme_as_markdown": true
 }

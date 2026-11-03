@@ -1,52 +1,30 @@
 # Python
 __pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
+*.pyc
+*.pyo
 *.egg-info/
-*.egg
-
-# Virtual Environment
-venv/
-ENV/
-env/
-.venv/
+dist/
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
-*~
 
-# Home Assistant
+# HA
+.pytest_cache/
+reference/
+.hass_build/
+
+# Docs
+docs/
+
+# Logs
 *.log
-*.db
-*.db-shm
-*.db-wal
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Build artifacts
-.hass_build/
-
-# WorkBuddy internal
-.workbuddy/
-tasks-*.md
-architecture-*.md
-prd-*.md
+# Build outputs
+*.zip
